@@ -1,0 +1,9 @@
+FROM alpine:latest
+
+WORKDIR /app
+ENV GREETING="Hello from Docksmith"
+
+RUN echo "Creating a file inside isolation"
+RUN echo $GREETING > message.txt
+
+CMD ["cat", "/app/message.txt"]

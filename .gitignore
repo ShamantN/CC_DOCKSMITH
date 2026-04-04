@@ -1,0 +1,7 @@
+docksmith
+testenv/docksmith
+testenv/alpine/
+testenv/alpine.tar.gz
+testenv/*.tmp
+.docksmith/
+
