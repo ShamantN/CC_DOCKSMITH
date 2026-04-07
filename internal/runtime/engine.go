@@ -14,40 +14,34 @@ import (
 // inside temporary filesystem roots safely isolated across namespaces.
 type IsolationEngine struct{}
 
-// ExecuteIsolated configures namespaces, a chroot, and binds execution streams
-// directly executing the target slice isolated from the host machine.
-// Note: CLONE_NEWPID and Chroot require elevated capabilities (sudo).
+// ExecuteIsolated configures namespaces and re-executes the current binary 
+// with 'internal-child' to safely enter the container environment.
 func ExecuteIsolated(rootfs string, cmdArgs []string, env []string, workDir string) (int, error) {
 	if len(cmdArgs) == 0 {
 		return 1, fmt.Errorf("no command provided for execution")
 	}
 
-	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	if workDir == "" {
+		workDir = "/"
+	}
+
+	// Re-execute ourselves with the hidden 'internal-child' subcommand
+	args := append([]string{"internal-child", rootfs, workDir}, cmdArgs...)
+	cmd := exec.Command("/proc/self/exe", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = env
 
-	// Process Working Directory is relative to the *inside* of the chroot
-	if workDir == "" {
-		workDir = "/"
-	}
-	
-	absWorkDir := filepath.Join(rootfs, workDir)
-	if err := os.MkdirAll(absWorkDir, 0755); err != nil {
-		return 1, fmt.Errorf("failed to ensure workdir exists: %w", err)
-	}
-	
-	cmd.Dir = workDir
-
 	// Linux strict namespaces allocation mapping
 	if !config.SkipIsolationForTesting {
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS,
-			Chroot:     rootfs,
 		}
 	} else {
-		// Without chroot, act like it ran in the folder
+		// Mock isolation for testing
+		absWorkDir := filepath.Join(rootfs, workDir)
+		os.MkdirAll(absWorkDir, 0755)
 		cmd.Dir = absWorkDir
 	}
 
@@ -55,11 +49,8 @@ func ExecuteIsolated(rootfs string, cmdArgs []string, env []string, workDir stri
 		return 1, fmt.Errorf("failed to start container process: %w", err)
 	}
 
-	// Wait captures the clean exit blocking safely
 	err := cmd.Wait()
-
 	if err != nil {
-		// Attempt to extract raw boolean exit-code if it was an explicit exit
 		if exitError, ok := err.(*exec.ExitError); ok {
 			if ws, ok := exitError.Sys().(syscall.WaitStatus); ok {
 				return ws.ExitStatus(), fmt.Errorf("container exited with non-zero code: %d", ws.ExitStatus())
@@ -70,3 +61,48 @@ func ExecuteIsolated(rootfs string, cmdArgs []string, env []string, workDir stri
 
 	return 0, nil
 }
+
+// RunChildProcess is called by the 'internal-child' command to finalize 
+// the isolation before executing the user's command.
+func RunChildProcess(rootfs, workDir string, cmdArgs []string) error {
+	// 1. Isolation: Set a unique hostname for the container
+	if err := syscall.Sethostname([]byte("docksmith-container")); err != nil {
+		return fmt.Errorf("sethostname: %w", err)
+	}
+
+	// 2. Filesystem: Trap the process inside the rootfs
+	if err := syscall.Chroot(rootfs); err != nil {
+		return fmt.Errorf("chroot: %w", err)
+	}
+
+	// Ensure workdir exists inside the container before changing to it
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		return fmt.Errorf("mkdir workDir: %w", err)
+	}
+	if err := os.Chdir(workDir); err != nil {
+		return fmt.Errorf("chdir: %w", err)
+	}
+
+	// 3. Path Resolution: Find the command inside the container's rootfs
+	executable := cmdArgs[0]
+	if !filepath.IsAbs(executable) {
+		pathEnv := os.Getenv("PATH")
+		paths := filepath.SplitList(pathEnv)
+		found := false
+		for _, p := range paths {
+			fullPath := filepath.Join(p, executable)
+			if _, err := os.Stat(fullPath); err == nil {
+				executable = fullPath
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("executable not found in PATH: %s", cmdArgs[0])
+		}
+	}
+
+	// 4. Final Handover: Replace this process with the target command
+	return syscall.Exec(executable, cmdArgs, os.Environ())
+}
+

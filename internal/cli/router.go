@@ -60,6 +60,8 @@ func (r *Router) Execute(args []string) int {
 		return r.handleRmi(cmdArgs)
 	case "run":
 		return r.handleRun(cmdArgs)
+	case "internal-child":
+		return r.handleChild(cmdArgs)
 	default:
 		fmt.Fprintf(r.err, "Unknown command: %s\n", command)
 		r.printUsage()
@@ -306,4 +308,19 @@ func (r *Router) handleRun(args []string) int {
 func Execute() {
 	r := NewRouter(os.Stdout, os.Stderr)
 	os.Exit(r.Execute(os.Args[1:]))
+}
+func (r *Router) handleChild(args []string) int {
+	if len(args) < 3 {
+		return 1
+	}
+	rootfs := args[0]
+	workDir := args[1]
+	// Remaining args are the command to execute
+	cmdArgs := args[2:]
+
+	if err := runtime.RunChildProcess(rootfs, workDir, cmdArgs); err != nil {
+		fmt.Fprintf(r.err, "Child execution error: %v\n", err)
+		return 1
+	}
+	return 0
 }

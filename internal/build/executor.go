@@ -56,6 +56,11 @@ func (e *Executor) EvalFROM(rawImage string) error {
 		e.state.LayerDigests = append(e.state.LayerDigests, layer.Digest)
 	}
 
+	// Fix: Inherit base image configuration (ENV, WORKDIR, CMD)
+	e.state.Config.Env = append([]string{}, manifest.Config.Env...)
+	e.state.Config.Cmd = append([]string{}, manifest.Config.Cmd...)
+	e.state.Config.WorkingDir = manifest.Config.WorkingDir
+
 	return nil
 }
 
@@ -148,7 +153,6 @@ func (e *Executor) EvalCOPY(src, dest string) error {
 			return "", err
 		}
 		
-		e.state.LayerDigests = append(e.state.LayerDigests, layer.Digest)
 		return layer.Digest, nil
 	})
 }
@@ -197,7 +201,6 @@ func (e *Executor) EvalRUN(cmd string) error {
 			return "", err
 		}
 
-		e.state.LayerDigests = append(e.state.LayerDigests, layer.Digest)
 		return layer.Digest, nil
 	})
 }
@@ -220,6 +223,7 @@ func (e *Executor) evaluateCacheAndArchive(keyInput CacheKeyInput, execute func(
 	if hitDigest != "" {
 		fmt.Printf("Step %d/%d : %s [CACHE HIT]\n", e.state.StepCurrent, e.state.StepTotal, keyInput.Instruction)
 		e.state.PreviousLayerDigest = hitDigest
+		e.state.LayerDigests = append(e.state.LayerDigests, hitDigest)
 		return nil
 	}
 
@@ -238,6 +242,7 @@ func (e *Executor) evaluateCacheAndArchive(keyInput CacheKeyInput, execute func(
 	}
 
 	e.state.PreviousLayerDigest = digest
+	e.state.LayerDigests = append(e.state.LayerDigests, digest)
 	return nil
 }
 
