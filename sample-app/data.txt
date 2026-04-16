@@ -1,0 +1,3 @@
+This is a static data file copied into the Docksmith image during the build process.
+It demonstrates that the COPY instruction works correctly.
+Docksmith: Build Once, Run Anywhere (Isolated).

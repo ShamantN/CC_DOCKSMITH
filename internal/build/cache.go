@@ -22,12 +22,14 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"docksmith/internal/config"
+	"docksmith/internal/archive"
 )
 
 // cacheIndexFile is the path to the shared cache index.
@@ -92,11 +94,28 @@ func ComputeCacheKey(input CacheKeyInput, fileHashFunc func([]string) (string, e
 
 	// 5. File hashes (COPY only)
 	if len(input.FilePaths) > 0 {
-		filesHash, err := fileHashFunc(input.FilePaths)
-		if err != nil {
-			return "", fmt.Errorf("hash source files: %w", err)
+		var digests []string
+		for _, path := range input.FilePaths {
+			err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if d.IsDir() {
+					return nil
+				}
+				digest, err := archive.HashFile(p)
+				if err != nil {
+					return err
+				}
+				digests = append(digests, digest)
+				return nil
+			})
+			if err != nil {
+				return "", err
+			}
 		}
-		fmt.Fprintf(h, "files:%s\n", filesHash)
+		sort.Strings(digests)
+		fmt.Fprintf(h, "files:%s\n", strings.Join(digests, ","))
 	}
 
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
@@ -108,7 +127,6 @@ func sortedEnv(envVars []string) string {
 	if len(envVars) == 0 {
 		return ""
 	}
-	// Parse into map to deduplicate and sort
 	kvMap := make(map[string]string, len(envVars))
 	for _, kv := range envVars {
 		parts := strings.SplitN(kv, "=", 2)
@@ -116,17 +134,11 @@ func sortedEnv(envVars []string) string {
 			kvMap[parts[0]] = parts[1]
 		}
 	}
-	keys := make([]string, 0, len(kvMap))
-	for k := range kvMap {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
 
-	pairs := make([]string, 0, len(keys))
-	for _, k := range keys {
-		pairs = append(pairs, k+"="+kvMap[k])
-	}
-	return strings.Join(pairs, ";")
+	// Using JSON ensures that values containing delimiters or special characters
+	// are serialized uniquely, preventing collisions.
+	data, _ := json.Marshal(kvMap)
+	return string(data)
 }
 
 // LookupCache checks if a cache key has a matching layer on disk.

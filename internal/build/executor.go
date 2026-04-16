@@ -3,6 +3,7 @@ package build
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,17 +136,46 @@ func (e *Executor) EvalCOPY(src, dest string) error {
 	return e.evaluateCacheAndArchive(keyInput, func() (string, error) {
 		// cache miss execution
 		entries := make(map[string]string)
+		// Final Safety Check: Verify physical path is within context
+		cleanContext := filepath.Clean(e.state.ContextDir)
+
 		for _, m := range matches {
-			srcPath := filepath.Join(e.state.ContextDir, m)
-			var destPath string
-			if strings.HasSuffix(dest, "/") {
-				destPath = filepath.Join(dest, filepath.Base(m))
-			} else {
-				destPath = dest
+			srcBase := filepath.Join(e.state.ContextDir, m)
+			
+			err := filepath.WalkDir(srcBase, func(p string, d fs.DirEntry, err error) error {
+				if err != nil { return err }
+				
+				// Apply path traversal protection to every file in the walk
+				if !strings.HasPrefix(p, cleanContext) {
+					return fmt.Errorf("security: path escapes build context: %s", p)
+				}
+
+				relToMatch, _ := filepath.Rel(srcBase, p)
+				
+				var destPath string
+				if !filepath.IsAbs(dest) {
+					destPath = filepath.Join(e.state.Config.WorkingDir, dest)
+				} else {
+					destPath = dest
+				}
+
+				// If destination is a directory (ends in / or is .)
+				if strings.HasSuffix(dest, "/") || dest == "." || dest == "./" || d.IsDir() {
+					if relToMatch == "." {
+						destPath = filepath.Join(destPath, filepath.Base(m))
+					} else {
+						destPath = filepath.Join(destPath, filepath.Base(m), relToMatch)
+					}
+				}
+
+				// Clean and add to entries
+				finalTarPath := strings.TrimPrefix(filepath.Clean(destPath), "/")
+				entries[p] = finalTarPath
+				return nil
+			})
+			if err != nil {
+				return "", err
 			}
-			// Clean dest path and remove leading slash for tar
-			destPath = strings.TrimPrefix(filepath.Clean(destPath), "/")
-			entries[srcPath] = destPath
 		}
 		
 		layer, err := archive.CreateLayer(entries)

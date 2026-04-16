@@ -114,14 +114,10 @@ func SaveManifest(m *ImageManifest, preserveCreated string) error {
 	return nil
 }
 
-// LoadManifest reads and parses a manifest JSON file from disk.
-func LoadManifest(name, tag string) (*ImageManifest, error) {
-	path := ManifestPath(name, tag)
+// LoadManifestFromPath reads and parses a manifest JSON file from a specific path.
+func LoadManifestFromPath(path string) (*ImageManifest, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("image not found: %s:%s", name, tag)
-		}
 		return nil, fmt.Errorf("failed to read manifest: %w", err)
 	}
 
@@ -131,6 +127,12 @@ func LoadManifest(name, tag string) (*ImageManifest, error) {
 	}
 
 	return &m, nil
+}
+
+// LoadManifest reads and parses a manifest JSON file from disk by name:tag.
+func LoadManifest(name, tag string) (*ImageManifest, error) {
+	path := ManifestPath(name, tag)
+	return LoadManifestFromPath(path)
 }
 
 // ParseNameTag splits "name:tag" into its components. Defaults tag to "latest".

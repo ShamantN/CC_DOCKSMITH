@@ -9,32 +9,44 @@ import (
 )
 
 func main() {
-// Discover all files inside alpine
-entries := make(map[string]string)
-filepath.Walk("alpine", func(path string, info os.FileInfo, err error) error {
-if path == "alpine" { return nil }
-rel, _ := filepath.Rel("alpine", path)
-entries[path] = rel
-return nil
-})
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: import_base <src_dir> <name:tag>")
+		os.Exit(1)
+	}
 
-layer, err := archive.CreateLayer(entries)
-if err != nil { panic(err) }
+	srcDir := os.Args[1]
+	nameTag := os.Args[2]
+	name, tag := image.ParseNameTag(nameTag)
 
-cfg := image.ImageConfig{
-Env: []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
-Cmd: []string{"/bin/sh"},
-WorkingDir: "/",
-}
+	// Discover all files inside source directory
+	entries := make(map[string]string)
+	err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil { return err }
+		if path == srcDir { return nil }
+		rel, _ := filepath.Rel(srcDir, path)
+		entries[path] = rel
+		return nil
+	})
+	if err != nil { panic(err) }
 
-layerEntry := image.LayerEntry{
-Digest: layer.Digest,
-Size: layer.Size,
-CreatedBy: "Base Import",
-}
+	fmt.Printf("Creating layer from %d files...\n", len(entries))
+	layer, err := archive.CreateLayer(entries)
+	if err != nil { panic(err) }
 
-manifest := image.NewManifest("alpine", "latest", cfg, []image.LayerEntry{layerEntry})
-if err := image.SaveManifest(manifest, ""); err != nil { panic(err) }
+	cfg := image.ImageConfig{
+		Env: []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		Cmd: []string{"/bin/sh"},
+		WorkingDir: "/",
+	}
 
-fmt.Printf("Successfully imported alpine:latest -> %s\n", manifest.Digest)
+	layerEntry := image.LayerEntry{
+		Digest: layer.Digest,
+		Size: layer.Size,
+		CreatedBy: "Base Import",
+	}
+
+	manifest := image.NewManifest(name, tag, cfg, []image.LayerEntry{layerEntry})
+	if err := image.SaveManifest(manifest, ""); err != nil { panic(err) }
+
+	fmt.Printf("Successfully imported %s:%s -> %s\n", name, tag, manifest.Digest)
 }

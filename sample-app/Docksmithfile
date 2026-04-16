@@ -1,0 +1,18 @@
+# Base image (must be manually seeded in ~/.docksmith/images/)
+FROM alpine:latest
+
+# Set environment variables
+ENV APP_MSG="Welcome to Docksmith"
+ENV KEY="defaultValue"
+
+# Set working directory
+WORKDIR /app
+
+# Copy context files
+COPY . .
+
+# Run a build-time command (demonstrates RUN and isolation during build)
+RUN chmod +x app.sh && touch /app/built_on_$(date +%Y-%m-%d).txt
+
+# Define the default command
+CMD ["/app/app.sh"]

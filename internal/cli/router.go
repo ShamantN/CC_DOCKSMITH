@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -114,6 +113,12 @@ func (r *Router) handleBuild(args []string) int {
 	state := build.NewBuildState()
 	state.ContextDir = contextPath
 	state.NoCache = *noCache
+
+	// Load existing manifest to preserve timestamp if possible (100% cache hit case)
+	name, imgTag := image.ParseNameTag(*tag)
+	if existing, err := image.LoadManifest(name, imgTag); err == nil {
+		state.OriginalCreated = existing.Created
+	}
 	
 	executor := build.NewExecutor(state)
 	parser := build.NewParser(executor)
@@ -125,7 +130,7 @@ func (r *Router) handleBuild(args []string) int {
 	}
 
 	// Build the manifest natively
-	name, imgTag := image.ParseNameTag(*tag)
+	// name and imgTag are already parsed at line 119
 	
 	// Prepare layer entries
 	// We need size and createdBy theoretically, but we only have digests in state right now.
@@ -151,7 +156,14 @@ func (r *Router) handleBuild(args []string) int {
 		Cmd:        state.Config.Cmd,
 		WorkingDir: state.Config.WorkingDir,
 	}, layerEntries)
-	if err := image.SaveManifest(manifest, ""); err != nil {
+
+	// Preserve original timestamp only if NOT a cache miss (100% cache hit)
+	preserveTime := ""
+	if !state.CacheCascade && !state.NoCache {
+		preserveTime = state.OriginalCreated
+	}
+
+	if err := image.SaveManifest(manifest, preserveTime); err != nil {
 		fmt.Fprintf(r.err, "Failed to save manifest: %v\n", err)
 		return 1
 	}
@@ -164,7 +176,7 @@ func (r *Router) handleBuild(args []string) int {
 func (r *Router) handleImages(args []string) int {
 	fs := flag.NewFlagSet("images", flag.ContinueOnError)
 	fs.SetOutput(r.err)
-	
+
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -175,24 +187,23 @@ func (r *Router) handleImages(args []string) int {
 		return 1
 	}
 
-	fmt.Fprintf(r.out, "%-30s %-15s %s\n", "IMAGE", "TAG", "DIGEST")
+	fmt.Fprintf(r.out, "%-20s %-15s %-15s %-25s\n", "NAME", "TAG", "IMAGE ID", "CREATED")
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(config.ImagesDir(), e.Name()))
+		manifest, err := image.LoadManifestFromPath(filepath.Join(config.ImagesDir(), e.Name()))
 		if err != nil {
 			continue
 		}
-		var m image.ImageManifest
-		if err := json.Unmarshal(data, &m); err != nil {
-			continue
+
+		// ID is the first 12 characters of the digest hash (after sha256:)
+		imageID := strings.TrimPrefix(manifest.Digest, "sha256:")
+		if len(imageID) > 12 {
+			imageID = imageID[:12]
 		}
-		digestShort := m.Digest
-		if len(digestShort) > 19 {
-			digestShort = digestShort[:19] + "..."
-		}
-		fmt.Fprintf(r.out, "%-30s %-15s %s\n", m.Name, m.Tag, digestShort)
+
+		fmt.Fprintf(r.out, "%-20s %-15s %-15s %-25s\n", manifest.Name, manifest.Tag, imageID, manifest.Created)
 	}
 	return 0
 }
@@ -200,7 +211,7 @@ func (r *Router) handleImages(args []string) int {
 func (r *Router) handleRmi(args []string) int {
 	fs := flag.NewFlagSet("rmi", flag.ContinueOnError)
 	fs.SetOutput(r.err)
-	
+
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -212,16 +223,28 @@ func (r *Router) handleRmi(args []string) int {
 
 	nameTag := fs.Arg(0)
 	name, tag := image.ParseNameTag(nameTag)
-	path := image.ManifestPath(name, tag)
-	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintf(r.err, "Error: image not found: %s\n", nameTag)
-		} else {
-			fmt.Fprintf(r.err, "Error removing image: %v\n", err)
-		}
+
+	manifest, err := image.LoadManifest(name, tag)
+	if err != nil {
+		fmt.Fprintf(r.err, "Error: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(r.out, "Removed image '%s'\n", nameTag)
+
+	// 1. Delete manifest file
+	manifestPath := image.ManifestPath(name, tag)
+	if err := os.Remove(manifestPath); err != nil {
+		fmt.Fprintf(r.err, "Error removing manifest: %v\n", err)
+		return 1
+	}
+
+	// 2. Delete all layers referenced in manifest
+	for _, layer := range manifest.Layers {
+		layerHex := strings.TrimPrefix(layer.Digest, "sha256:")
+		layerPath := filepath.Join(config.LayersDir(), layerHex+".tar")
+		_ = os.Remove(layerPath) // Ignore error if layer already gone or shared
+	}
+
+	fmt.Fprintf(r.out, "Deleted image: %s\n", nameTag)
 	return 0
 }
 

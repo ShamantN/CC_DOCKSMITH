@@ -125,14 +125,19 @@ func addEntry(tw *tar.Writer, srcPath, tarPath string) error {
 	// Build a normalized header — zero all timestamps and ids
 	hdr := &tar.Header{
 		Name:     tarPath,
-		Mode:     int64(info.Mode()),
 		Uid:      0,
 		Gid:      0,
 		Uname:    "root",
 		Gname:    "root",
-		ModTime:  time.Time{},
-		Size:     0,
+		ModTime:  time.Time{}, // Zero timestamp for reproducibility
 		Typeflag: tar.TypeReg,
+	}
+
+	// Normalize permissions based on executable bit (Section 5.1/5.2)
+	if info.Mode()&0111 != 0 {
+		hdr.Mode = 0755
+	} else {
+		hdr.Mode = 0644
 	}
 
 	if info.IsDir() {

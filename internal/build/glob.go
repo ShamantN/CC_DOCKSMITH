@@ -1,6 +1,7 @@
 package build
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,12 +14,24 @@ import (
 func MatchGlob(root, pattern string) ([]string, error) {
 	var matches []string
 
+	// Path Traversal Defense: Deny absolute paths and parent directory escapes
+	if filepath.IsAbs(pattern) {
+		return nil, fmt.Errorf("security: absolute paths are not allowed in build context: %s", pattern)
+	}
+	if strings.Contains(pattern, "..") {
+		return nil, fmt.Errorf("security: parent directory tracking ('..') is not allowed in build context: %s", pattern)
+	}
+
 	// Convert to OS-specific path for safe joining
 	cleanedPattern := filepath.Clean(pattern)
 	
 	// If no glob pattern exists, just verify it exists exactly
 	if !strings.Contains(cleanedPattern, "*") {
 		fullPath := filepath.Join(root, cleanedPattern)
+		// Ensure Join didn't somehow escape (extra safety)
+		if !strings.HasPrefix(fullPath, filepath.Clean(root)) {
+			return nil, fmt.Errorf("security: resolved path is outside build context: %s", cleanedPattern)
+		}
 		if _, err := os.Stat(fullPath); err == nil {
 			return []string{cleanedPattern}, nil
 		}

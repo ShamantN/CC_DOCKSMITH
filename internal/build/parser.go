@@ -19,19 +19,39 @@ func NewParser(executor *Executor) *Parser {
 
 // Parse reads the file line by line executing instructions sequentially
 func (p *Parser) Parse(reader io.Reader) error {
+	// 1. Slurp all lines to prep counters
+	var lines []string
 	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading file: %w", err)
+	}
+
+	// 2. Count total instructions
+	totalSteps := 0
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			totalSteps++
+		}
+	}
+	p.executor.state.StepTotal = totalSteps
+	p.executor.state.StepCurrent = 0
 	p.executor.state.CurrentLine = 0
 
-	for scanner.Scan() {
+	// 3. Execute instructions
+	for _, line := range lines {
 		p.executor.state.CurrentLine++
-		line := strings.TrimSpace(scanner.Text())
+		trimmed := strings.TrimSpace(line)
 
 		// Ignore empty lines and comments
-		if line == "" || strings.HasPrefix(line, "#") {
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 
-		parts := strings.SplitN(line, " ", 2)
+		parts := strings.SplitN(trimmed, " ", 2)
 		instruction := strings.ToUpper(parts[0])
 
 		var arg string
@@ -43,10 +63,8 @@ func (p *Parser) Parse(reader io.Reader) error {
 			return fmt.Errorf("[Error] line %d: %w", p.executor.state.CurrentLine, err)
 		}
 	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading file: %w", err)
-	}
+	return nil
+}
 
 	// Basic validation at end of file
 	if p.executor.state.BaseImage == "" && p.executor.state.CurrentLine > 0 {
@@ -84,13 +102,17 @@ func (p *Parser) executeInstruction(instruction, arg string) error {
 		
 	case "COPY":
 		// Standard COPY <src> <dest> requires 2 arguments.
-		// If dest contains spaces, usually you'd use JSON format, but for simplicity
-		// we treat the first space-separated string as src, and the rest as dest.
-		copyParts := strings.SplitN(arg, " ", 2)
-		if len(copyParts) < 2 {
+		// We use Fields to handle arbitrary whitespace between arguments.
+		f := strings.Fields(arg)
+		if len(f) < 2 {
 			return fmt.Errorf("COPY requires source and destination arguments")
 		}
-		return p.executor.EvalCOPY(copyParts[0], strings.TrimSpace(copyParts[1]))
+		// In Docksmith, we treat the first part as SRC and the second as DEST.
+		// If DEST also has spaces, the user should be using JSON (not yet supported)
+		// or we can join the rest. Let's join the rest for flexibility.
+		src := f[0]
+		dest := strings.Join(f[1:], " ")
+		return p.executor.EvalCOPY(src, dest)
 		
 	case "RUN":
 		if arg == "" {

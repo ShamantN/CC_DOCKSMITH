@@ -166,11 +166,11 @@ func TestSortedEnv(t *testing.T) {
 		expected string
 	}{
 		{[]string{}, ""},
-		{[]string{"B=2", "A=1"}, "A=1;B=2"},
-		{[]string{"A=1", "B=2"}, "A=1;B=2"},
-		{[]string{"Z=26", "A=1", "M=13"}, "A=1;M=13;Z=26"},
+		{[]string{"B=2", "A=1"}, `{"A":"1","B":"2"}`},
+		{[]string{"A=1", "B=2"}, `{"A":"1","B":"2"}`},
+		{[]string{"Z=26", "A=1", "M=13"}, `{"A":"1","M":"13","Z":"26"}`},
 		// Duplicate key should take the last value
-		{[]string{"A=1", "A=2"}, "A=2"},
+		{[]string{"A=1", "A=2"}, `{"A":"2"}`},
 	}
 
 	for _, tt := range tests {

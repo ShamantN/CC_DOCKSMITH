@@ -4,100 +4,114 @@ Docksmith is an educational, daemon-less, Docker-like container build and runtim
 
 Designed specifically for systems programming education, Docksmith strips away the massive complexity of modern container orchestrators to bare metal Linux primitives. It demonstrates exactly how images are built, how deterministic caching works, and how processes are isolated at the OS level using purely the Go standard library and Linux namespaces.
 
-## 🌟 Core Features
+## 🏗️ Architectural Overview
+Docksmith operates on four key principles:
 
-- **Zero-Daemon Architecture**: There is no `dockerd` background process. The `docksmith` CLI directly manipulates state on disk and executes processes natively.
-- **Deterministic Build Engine**: Implementing byte-for-byte reproducibility. Every layer generated is purely content-addressed. Timestamps are scrubbed, and ownership is normalized (`root:root`) to guarantee identical cache hashes on any machine.
-- **Content-Addressable Storage (CAS)**: Layers are stored immutably in `~/.docksmith/layers/` named by their exact SHA-256 tar digest.
-- **Native OS Isolation**: The runtime uses Linux Namespaces (`CLONE_NEWNS`, `CLONE_NEWPID`, `CLONE_NEWUTS`) and `chroot` to securely jail execution commands without external dependencies like `runc`.
-- **Instruction Caching Pipeline**: A custom Docksmithfile parser that evaluates state, cascades cache miss signals, captures execution filesystem deltas, and hashes combinations of inputs (`ENV + WORKDIR + Previous Layer`) to prevent redundant compilation.
+1.  **Daemonless**: No background server process (`dockerd`). The CLI directly interacts with the registry and kernel.
+2.  **CAS (Content-Addressable Storage)**: Every image layer is immutable and named by its SHA-256 digest. This ensures storage efficiency and data integrity.
+3.  **Deterministic Caching**: Build steps are cached based on a hash of the instruction, context files, and previous layers. Normalized timestamps and ownership ensure bit-for-bit reproducibility.
+4.  **OS-Level Isolation**: Containers are realized using Linux Namespaces (`PID`, `Mount`, `UTS`) and `chroot`. Hard isolation is achieved without external dependencies like `runc`.
+
+> [!IMPORTANT]
+> **Sudo Requirement**: `docksmith build` and `docksmith run` require `sudo` privileges because they utilize Linux kernel namespaces (`CLONE_NEWPID`, `CLONE_NEWNS`) and `chroot` which are restricted operations.
 
 ---
 
 ## 🛠️ Installation & Setup
 
-Because Docksmith directly leverages Linux Namespaces, it **must** be built and run on a Linux environment (or WSL2).
-
 ```bash
-# 1. Clone the repository
-git clone https://github.com/ShamantN/CC_DOCKSMITH.git
-cd CC_DOCKSMITH
-
-# 2. Build the Docksmith Engine binary
+# 1. Build the Docksmith Engine binary
 go build -o docksmith ./cmd/docksmith/main.go
 ```
 
-### Initializing the Base Image
-Since Docksmith is built to function entirely offline, there is no `docker pull` network logic. You must ingest a root filesystem (like Alpine Linux) directly into the engine's registry:
+## 🚀 The Demo Guide (Step-by-Step)
+
+Follow these steps to explore all core capabilities of Docksmith.
+
+### 1. Manual Seeding (Registry Initialization)
+Since Docksmith is designed to function entirely offline, you must manually seed the registry with a base image (e.g., Alpine Linux). Use the provided import tool:
 
 ```bash
-# Navigate to the testing directory
 cd testenv
-
-# Download the Alpine minirootfs
-wget -qO alpine.tar.gz https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/alpine-minirootfs-3.18.4-x86_64.tar.gz
-
-# Import the tar directly into Docksmith (must run as sudo to establish the global ~/.docksmith registry correctly)
-sudo go run import_alpine.go alpine.tar.gz
+# Assuming alpine.tar.gz exists (downloaded from https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/alpine-minirootfs-3.18.4-x86_64.tar.gz)
+sudo go run import_base.go alpine.tar.gz alpine:latest
+cd ..
 ```
 
----
+### 2. Cold Build (Cache Miss)
+Build the sample application for the first time. You will see cache misses for every step.
 
-## 💻 Command Reference
+```bash
+sudo ./docksmith build -t myapp:latest ./sample-app
+```
+*Observe that each instruction triggers an execution and layer generation.*
 
-All active state is managed inside the invoking user's home directory: `~/.docksmith/`.
+### 3. Warm Build (Cache Hit)
+Run the exact same build command again.
 
-### 1. `images`
-Lists all container images currently stored in the local offline registry.
+```bash
+sudo ./docksmith build -t myapp:latest ./sample-app
+```
+*Observe the `[CACHE HIT]` messages. The build should finish almost instantly.*
+
+### 4. Cache Busting
+Modify a context file to trigger a cache miss that cascades.
+
+```bash
+echo "Busting the cache!" >> ./sample-app/data.txt
+sudo ./docksmith build -t myapp:latest ./sample-app
+```
+*Observe that the `COPY` instruction and all subsequent instructions (like `RUN` and `CMD`) result in cache misses.*
+
+### 5. List Images
+Verify that your image is registered correctly.
+
 ```bash
 ./docksmith images
 ```
-**Output Details**: Displays the Image Name, Tag, and the computed SHA-256 Manifest Digest.
+*Output identifies images by Name, Tag, Image ID (digest), and Creation time.*
 
-### 2. `build`
-Parses a `Docksmithfile` in the target context directory, executes the instructions layer-by-layer, evaluates caching, and outputs an executable container image manifest.
-```bash
-# Usage: build -t <name:tag> [--no-cache] <context-directory>
-sudo ./docksmith build -t myapp:v1 .
-```
-*(Requires `sudo` because `RUN` instructions utilize kernel namespaces to isolate the build environment).*
-* **How it works**:
-  * Evaluates directives like `FROM`, `WORKDIR`, `ENV`, `CMD`.
-  * Computes deterministic cache keys for `COPY` and `RUN`.
-  * If a `RUN` cache misses, it creates a temporary `rootfs`, intercepts the file deltas, packages them into a timestamp-zeroed tarball, and saves the new layer.
-  * Optionally pass `--no-cache` to bust the cache completely.
+### 6. Run Container
+Execute your isolated application.
 
-### 3. `run`
-Extracts the immutable image layers, binds them into a temporary virtual root filesystem, and launches an isolated Linux process exactly against the image configurations.
 ```bash
-# Usage: run [-e KEY=VALUE...] <name:tag> [command]
-sudo ./docksmith run myapp:v1 /bin/sh -c "echo hello from inside"
+sudo ./docksmith run myapp:latest
 ```
-*(Requires `sudo` because it maps `CLONE_NEWPID` and `chroot` natively).*
-* **How it works**: It pulls the image manifest, iterates over and sequentially extracts the layer hierarchy, merges any `-e` CLI flags against the internal `ENV` states, bounds the directory root, and fires the OS clone execution.
+*The app should print its startup message and list the files in its internal `/app` directory.*
 
-### 4. `rmi`
-Removes an image manifest actively tracked from the registry.
+### 7. Override Environment Variables
+Prove that runtime overrides work correctly using the `-e` flag.
+
 ```bash
-# Usage: rmi <name:tag>
-./docksmith rmi myapp:v1
+sudo ./docksmith run -e KEY=NewValueOverride myapp:latest
 ```
+*Observe in the output that `KEY` now reflects `NewValueOverride` instead of its default value.*
+
+### 8. Process Isolation Test
+Verify that the container is strictly isolated from the host filesystem.
+
+```bash
+# Create a file inside the container
+sudo ./docksmith run myapp:latest /bin/sh -c 'touch /hacked.txt && ls /hacked.txt'
+
+# Verify the file DOES NOT exist on the host
+ls /hacked.txt
+```
+*The second command should return "No such file or directory", proving the host is untouched.*
+
+### 9. Remove Image
+Clean up the registry.
+
+```bash
+./docksmith rmi myapp:latest
+./docksmith images
+```
+*Note: As per design, shared layers are deleted when an image is removed if reference counting is not implemented.*
 
 ---
 
-## 🏗️ Architecture & Project Structure
-
-The project strictly forces Zero-Dependencies (outside of standard Go library usages).
-
-- `cmd/docksmith/` - Main entry-point binaries.
-- `internal/cli/` - Router and parsing interface handling.
-- `internal/build/` - The Docksmithfile parsing engine, execution mapping, glob resolving, and Deterministic Cache key algorithms.
-- `internal/archive/` - Deterministic tarball generation scrubbing timestamps and unifying UIDs.
-- `internal/image/` - JSON Manifest generation mapping content layers efficiently.
-- `internal/runtime/` - OS-level runtime engine triggering direct `syscall.SysProcAttr` interactions enforcing strict Linux capability drops.
-- `internal/config/` - State directory tracking (`~/.docksmith/`).
-
-## 🎓 Educational Goals Met
-- **"Docker-from-scratch"** — Unravels Container orchestration magic proving "Containers are just Linux Processes."
-- **Immutable Infrastructure** — Demonstrates Content-Addressed Storage concepts.
-- **Dependency Graphs** — Proves the effectiveness of DAGs in caching compilation systems.
+## 🎓 Learning Objectives Met
+- **Docker-from-scratch**: Unravels container magic.
+- **Immutable Infrastructure**: Content-Addressed Storage concepts.
+- **Dependency Graphs**: Deterministic build pipelines.
+- **Linux Internals**: Direct usage of Namespaces and Chroot.

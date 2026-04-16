@@ -50,6 +50,10 @@ type BuildState struct {
 
 	// ContextDir is the build context path (host filesystem directory).
 	ContextDir string
+
+	// OriginalCreated stores the 'Created' timestamp of a pre-existing image
+	// to ensure stability on 100% cache-hit rebuilds.
+	OriginalCreated string
 }
 
 // NewBuildState creates a new empty state object
