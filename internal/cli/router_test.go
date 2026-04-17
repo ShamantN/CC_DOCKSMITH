@@ -26,6 +26,8 @@ func TestRouter_Build(t *testing.T) {
 	}
 
 	// With tag and context but no Docksmithfile — should fail with an error about Docksmithfile
+	out.Reset()
+	errOut.Reset()
 	code = r.Execute([]string{"build", "-t", "myapp:latest", "--no-cache", "."})
 	// We expect failure because there is no Docksmithfile in "."
 	// But flag parsing was correct, so it should NOT fail with flag errors.
@@ -55,6 +57,8 @@ func TestRouter_Run(t *testing.T) {
 	}
 
 	// With envs and cmd, but mocked missing image will fail cleanly
+	out.Reset()
+	errOut.Reset()
 	code = r.Execute([]string{"run", "-e", "FOO=BAR", "-e", "BAZ=QUX", "myapp:latest", "echo", "hello"})
 	if code == 0 {
 		t.Errorf("Expected failure for missing image, got %d", code)

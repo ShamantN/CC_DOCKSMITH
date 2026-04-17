@@ -25,25 +25,28 @@ func ExecuteIsolated(rootfs string, cmdArgs []string, env []string, workDir stri
 		workDir = "/"
 	}
 
-	// Re-execute ourselves with the hidden 'internal-child' subcommand
-	args := append([]string{"internal-child", rootfs, workDir}, cmdArgs...)
-	cmd := exec.Command("/proc/self/exe", args...)
+	var cmd *exec.Cmd
+	// Linux strict namespaces allocation mapping
+	if !config.SkipIsolationForTesting {
+		// Re-execute ourselves with the hidden 'internal-child' subcommand
+		args := append([]string{"internal-child", rootfs, workDir}, cmdArgs...)
+		cmd = exec.Command("/proc/self/exe", args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS,
+		}
+	} else {
+		// Mock isolation for testing: run directly on host using chroot path
+		cmd = exec.Command(cmdArgs[0], cmdArgs[1:]...)
+		absWorkDir := filepath.Join(rootfs, workDir)
+		os.MkdirAll(absWorkDir, 0755)
+		cmd.Dir = absWorkDir
+	}
+
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = env
 
-	// Linux strict namespaces allocation mapping
-	if !config.SkipIsolationForTesting {
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Cloneflags: syscall.CLONE_NEWNS | syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS,
-		}
-	} else {
-		// Mock isolation for testing
-		absWorkDir := filepath.Join(rootfs, workDir)
-		os.MkdirAll(absWorkDir, 0755)
-		cmd.Dir = absWorkDir
-	}
 
 	if err := cmd.Start(); err != nil {
 		return 1, fmt.Errorf("failed to start container process: %w", err)

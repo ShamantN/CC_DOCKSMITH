@@ -63,8 +63,6 @@ func (p *Parser) Parse(reader io.Reader) error {
 			return fmt.Errorf("[Error] line %d: %w", p.executor.state.CurrentLine, err)
 		}
 	}
-	return nil
-}
 
 	// Basic validation at end of file
 	if p.executor.state.BaseImage == "" && p.executor.state.CurrentLine > 0 {

@@ -137,39 +137,57 @@ func (e *Executor) EvalCOPY(src, dest string) error {
 		// cache miss execution
 		entries := make(map[string]string)
 		// Final Safety Check: Verify physical path is within context
-		cleanContext := filepath.Clean(e.state.ContextDir)
+		cleanContext, _ := filepath.Abs(e.state.ContextDir)
 
 		for _, m := range matches {
 			srcBase := filepath.Join(e.state.ContextDir, m)
-			
-			err := filepath.WalkDir(srcBase, func(p string, d fs.DirEntry, err error) error {
+			srcInfo, err := os.Stat(srcBase)
+			if err != nil { return "", err }
+
+			err = filepath.WalkDir(srcBase, func(p string, d fs.DirEntry, err error) error {
 				if err != nil { return err }
 				
-				// Apply path traversal protection to every file in the walk
-				if !strings.HasPrefix(p, cleanContext) {
+				// Apply path traversal protection using absolute paths
+				absRoot, _ := filepath.Abs(cleanContext)
+				absP, _ := filepath.Abs(p)
+
+				// Must start with root and either be root or followed by a separator
+				if !strings.HasPrefix(absP, absRoot) {
 					return fmt.Errorf("security: path escapes build context: %s", p)
+				}
+				if len(absP) > len(absRoot) && absP[len(absRoot)] != os.PathSeparator {
+					return fmt.Errorf("security: path escapes build context boundary: %s", p)
 				}
 
 				relToMatch, _ := filepath.Rel(srcBase, p)
 				
-				var destPath string
+				var targetBase string
 				if !filepath.IsAbs(dest) {
-					destPath = filepath.Join(e.state.Config.WorkingDir, dest)
+					targetBase = filepath.Join(e.state.Config.WorkingDir, dest)
 				} else {
-					destPath = dest
+					targetBase = dest
 				}
 
-				// If destination is a directory (ends in / or is .)
-				if strings.HasSuffix(dest, "/") || dest == "." || dest == "./" || d.IsDir() {
-					if relToMatch == "." {
-						destPath = filepath.Join(destPath, filepath.Base(m))
+				var finalDest string
+				if !srcInfo.IsDir() {
+					// Source is a file: COPY file dest
+					if strings.HasSuffix(dest, "/") {
+						// COPY file dir/ -> dir/file
+						finalDest = filepath.Join(targetBase, filepath.Base(srcBase))
 					} else {
-						destPath = filepath.Join(destPath, filepath.Base(m), relToMatch)
+						// COPY file target -> target
+						finalDest = targetBase
 					}
+				} else {
+					// Source is a directory: COPY dir/ dest/
+					// Docker copies the CONTENTS of the directory, not the directory itself.
+					if relToMatch == "." {
+						return nil // Skip the root directory entry itself
+					}
+					finalDest = filepath.Join(targetBase, relToMatch)
 				}
 
-				// Clean and add to entries
-				finalTarPath := strings.TrimPrefix(filepath.Clean(destPath), "/")
+				finalTarPath := strings.TrimPrefix(filepath.Clean(finalDest), "/")
 				entries[p] = finalTarPath
 				return nil
 			})

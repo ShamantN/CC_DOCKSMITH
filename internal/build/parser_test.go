@@ -24,11 +24,13 @@ func TestParser_ValidInstructions(t *testing.T) {
 	
 	// Set an empty context dir for testing
 	state := NewBuildState()
-	state.ContextDir = tmpDir
+	contextDir := filepath.Join(tmpDir, "context")
+	os.MkdirAll(contextDir, 0755)
+	state.ContextDir = contextDir
 	
 	// Create mock base image
 	mockImage := filepath.Join(tmpDir, "images", "alpine_latest.json")
-	os.WriteFile(mockImage, []byte("{}"), 0644)
+	os.WriteFile(mockImage, []byte(`{"digest":"sha256:123"}`), 0644)
 
 	docksmithfile := `
 # This is a comment

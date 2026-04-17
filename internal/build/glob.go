@@ -28,9 +28,17 @@ func MatchGlob(root, pattern string) ([]string, error) {
 	// If no glob pattern exists, just verify it exists exactly
 	if !strings.Contains(cleanedPattern, "*") {
 		fullPath := filepath.Join(root, cleanedPattern)
-		// Ensure Join didn't somehow escape (extra safety)
-		if !strings.HasPrefix(fullPath, filepath.Clean(root)) {
+		
+		// Defense: Use absolute paths for the containment check
+		absRoot, _ := filepath.Abs(root)
+		absFull, _ := filepath.Abs(fullPath)
+		
+		// Must start with root and either be root or followed by a separator
+		if !strings.HasPrefix(absFull, absRoot) {
 			return nil, fmt.Errorf("security: resolved path is outside build context: %s", cleanedPattern)
+		}
+		if len(absFull) > len(absRoot) && absFull[len(absRoot)] != os.PathSeparator {
+			return nil, fmt.Errorf("security: resolved path is outside build context boundary: %s", cleanedPattern)
 		}
 		if _, err := os.Stat(fullPath); err == nil {
 			return []string{cleanedPattern}, nil

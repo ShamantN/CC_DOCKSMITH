@@ -100,7 +100,11 @@ func (r *Router) handleBuild(args []string) int {
 		return 1
 	}
 
-	contextPath := fs.Arg(0)
+	contextPath, err := filepath.Abs(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(r.err, "Error resolving context path: %v\n", err)
+		return 1
+	}
 	docksmithFilePath := filepath.Join(contextPath, "Docksmithfile")
 	
 	file, err := os.Open(docksmithFilePath)
@@ -226,7 +230,7 @@ func (r *Router) handleRmi(args []string) int {
 
 	manifest, err := image.LoadManifest(name, tag)
 	if err != nil {
-		fmt.Fprintf(r.err, "Error: %v\n", err)
+		fmt.Fprintf(r.err, "Error: image not found: %s\n", nameTag)
 		return 1
 	}
 
@@ -269,7 +273,7 @@ func (r *Router) handleRun(args []string) int {
 
 	manifest, err := image.LoadManifest(name, tag)
 	if err != nil {
-		fmt.Fprintf(r.err, "Error loading image: %v\n", err)
+		fmt.Fprintf(r.err, "Error loading image: image not found: %s\n", rawImage)
 		return 1
 	}
 

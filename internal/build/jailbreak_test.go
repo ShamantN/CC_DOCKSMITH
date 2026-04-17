@@ -77,20 +77,14 @@ func TestMatchGlobPathTraversal(t *testing.T) {
 }
 
 func TestSymlinkLeakPrevention(t *testing.T) {
-	// Docker's security model (and Docksmith's after fix) should NOT follow 
-	// symlinks that point outside the context during the Copy process.
-	// We want to ensure that if someone creates a symlink to /etc/passwd 
-	// inside their build context, Docksmith just copies the symlink string 
-	// itself without reading the host's /etc/passwd file content.
-
-	tmpDir, _ := os.MkdirTemp("", "docksmith-sym-*")
-	defer os.RemoveAll(tmpDir)
-
-	context := filepath.Join(tmpDir, "context")
+	tmp := setupJailbreakTest(t)
+	defer os.RemoveAll(tmp)
+	
+	context := filepath.Join(tmp, "context")
 	os.MkdirAll(context, 0755)
 
 	// Host sensitive file
-	hostPasswd := filepath.Join(tmpDir, "host_passwd")
+	hostPasswd := filepath.Join(tmp, "host_passwd")
 	os.WriteFile(hostPasswd, []byte("secret_host_data"), 0644)
 
 	// Symlink inside context pointing outside
